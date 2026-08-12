@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harness-asymmetry"
+version = "0.1.0"
+description = "Асимметрия агентного харнесса как источник рыночной власти: экспериментальный стенд переговоров LLM-агентов (специальность 5.2.2)."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+authors = [{ name = "PhD research, специальность 5.2.2" }]
+dependencies = [
+  "openai>=1.99,<3.0.0",
+  "pandas>=2.2,<3.0.0",
+  "numpy>=1.26,<3.0.0",
+  "scipy>=1.13,<2.0.0",
+  "statsmodels>=0.14,<0.15",
+  "matplotlib>=3.9,<4.0.0",
+  "python-dotenv>=1.0,<2.0.0",
+  "rich>=13.7,<16.0",
+  "tabulate>=0.9,<1.0.0",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+harness-asymmetry = "harness_asymmetry.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -18,6 +18,10 @@
 # на macOS .pth-файлам pip-editable проставляется флаг hidden, и site.py их
 # пропускает. PYTHONPATH обходит это гарантированно (та же засада описана в
 # соседнем проекте mas_managerial_hypothesis_verifying).
+#
+# Пустые массивы разворачиваются идиомой ${A[@]+"${A[@]}"}: в bash 3.2, который
+# идёт с macOS как /bin/bash, обычное "${A[@]}" на пустом массиве под set -u
+# падает с «unbound variable».
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -90,12 +94,12 @@ for STAGE in ${STAGES}; do
   echo "------------------------------------------------------------------"
   # Каждый этап в своём каталоге: чекпоинты и манифесты не перемешиваются,
   # а упавший этап можно догнать, не трогая соседние.
-  "${WRAPPER[@]}" "${PY[@]}" run \
+  ${WRAPPER[@]+"${WRAPPER[@]}"} "${PY[@]}" run \
     --log-level warning \
     --config "$CFG" \
     --experiment "$STAGE" \
     --provider openrouter \
-    "${REPEATS_ARG[@]}" \
+    ${REPEATS_ARG[@]+"${REPEATS_ARG[@]}"} \
     --workers "$WORKERS" \
     --output "${OUT}/${STAGE}" \
     --report "${REP}/${STAGE}" \
@@ -122,7 +126,7 @@ for meta_path in sorted(root.glob("*/run_meta.json")):
         print(f"      {model}: ok={h.get('calls_ok')} fail={h.get('calls_failed')} "
               f"пустых={h.get('empty_responses', 0)} "
               f"failure_rate={h.get('failure_rate_pct')}% "
-              f"кеш={h.get('cache_hit_rate_pct')}% "
+              f"кеш={h.get('cache_hit_rate_pct', 0)}% "
               f"≈${h.get('estimated_cost_usd', 0)}")
     if rate > 10:
         print(f"      ❌ сбоев >10% — провайдер сыпался, часть выборки потеряна. "

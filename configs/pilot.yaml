@@ -31,7 +31,7 @@ runner:
   max_workers: 2
   counterbalance_roles: true
   max_turns_per_session: 20
-  max_tokens_per_session: 80000
+  max_tokens_per_session: 400000
   max_wall_s_per_session: 600.0
   max_consecutive_failures: 8
   fail_fast: false

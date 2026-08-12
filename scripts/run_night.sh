@@ -26,7 +26,7 @@ cd "$ROOT"
 STAMP="${STAMP:-$(date +%Y%m%d)}"
 OUT="${OUT:-outputs/night_${STAMP}}"
 REP="${REP:-reports/night_${STAMP}}"
-WORKERS="${WORKERS:-6}"
+WORKERS="${WORKERS:-24}"
 REPEATS="${REPEATS:-40}"
 STAGES="${STAGES:-pilot E2 E1}"
 

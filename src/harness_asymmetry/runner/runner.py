@@ -216,37 +216,49 @@ class ExperimentRunner:
             {"total": len(specs), "pending": len(pending), "resumed": resumed},
         )
 
-        cells: dict[tuple[str, str], list[SessionSpec]] = defaultdict(list)
+        pending = _apply_pair_chunking(pending, self.config.runner.pair_chunk)
+        cells: dict[tuple[str, str, str], list[SessionSpec]] = defaultdict(list)
         for spec in pending:
-            cells[(spec.experiment, spec.cell_id)].append(spec)
+            cells[(spec.experiment, spec.cell_id, spec.pair_id)].append(spec)
         for bucket in cells.values():
             bucket.sort(key=lambda s: s.repeat_index)
+
+        # Ячейку приходится гнать последовательно только там, где включена
+        # память (H1): она копит историю пары от повтора к повтору, и
+        # перестановка повторов сломала бы репутационный механизм. Если H1
+        # выключена у обеих сторон, межсессионного состояния нет вовсе —
+        # такие ячейки распараллеливаем посессионно. На планах вроде Э2, где
+        # половина конфигураций без памяти, это разница между «ночь» и
+        # «сутки»: узким местом перестаёт быть число ячеек.
+        sequential = {k: v for k, v in cells.items() if _needs_memory_order(v)}
+        parallel = [s for k, v in cells.items() if k not in sequential for s in v]
 
         records: list[SessionRecord] = list(done.values())
         failed = sum(1 for r in records if r.technical_failure)
 
         workers = max(1, int(self.config.runner.max_workers))
         started = time.perf_counter()
-        if workers == 1 or len(cells) <= 1:
+        if workers == 1:
             for key, bucket in cells.items():
                 for record in self._run_cell(key, bucket):
                     records.append(record)
                     failed += int(record.technical_failure)
         else:
             with ThreadPoolExecutor(max_workers=workers) as pool_exec:
-                futures = {
-                    pool_exec.submit(self._run_cell_collect, key, bucket): key
-                    for key, bucket in cells.items()
-                }
+                futures: dict[Any, str] = {}
+                for key, bucket in sequential.items():
+                    futures[pool_exec.submit(self._run_cell_collect, key, bucket)] = str(key)
+                for spec in parallel:
+                    futures[pool_exec.submit(self._run_single, spec)] = spec.session_id
                 for future in as_completed(futures):
-                    key = futures[future]
+                    label = futures[future]
                     try:
-                        cell_records = future.result()
+                        batch = future.result()
                     except Exception:  # noqa: BLE001
-                        logger.exception("Ячейка %s упала целиком", key)
+                        logger.exception("Задача %s упала целиком", label)
                         continue
-                    records.extend(cell_records)
-                    failed += sum(1 for r in cell_records if r.technical_failure)
+                    records.extend(batch)
+                    failed += sum(1 for r in batch if r.technical_failure)
 
         elapsed = time.perf_counter() - started
         health = {model: client.health() for model, client in self._clients.items()}
@@ -286,16 +298,21 @@ class ExperimentRunner:
     # -- ячейка -------------------------------------------------------------
 
     def _run_cell_collect(
-        self, key: tuple[str, str], bucket: list[SessionSpec]
+        self, key: tuple[str, str, str], bucket: list[SessionSpec]
     ) -> list[SessionRecord]:
         return list(self._run_cell(key, bucket))
 
+    def _run_single(self, spec: SessionSpec) -> list[SessionRecord]:
+        """Одна сессия ячейки без памяти — порядок повторов не важен."""
+
+        return list(self._run_cell((spec.experiment, spec.cell_id, spec.pair_id), [spec]))
+
     def _run_cell(
-        self, key: tuple[str, str], bucket: list[SessionSpec]
+        self, key: tuple[str, str, str], bucket: list[SessionSpec]
     ) -> Iterable[SessionRecord]:
         """Все сессии одной ячейки — строго последовательно (память копится)."""
 
-        experiment, cell_id = key
+        experiment, cell_id, _pair = key
         path = self.output_dir / "sessions" / f"{_safe_name(experiment)}__{_safe_name(cell_id)}.jsonl"
         stores: dict[str, MemoryStore] = {}
         consecutive_failures = 0
@@ -432,6 +449,40 @@ class ExperimentRunner:
                 self.progress_cb(kind, payload)
             except Exception:  # noqa: BLE001 - прогресс не должен ронять прогон
                 logger.debug("progress_cb упал", exc_info=True)
+
+
+def _apply_pair_chunking(specs: list[SessionSpec], chunk: int) -> list[SessionSpec]:
+    """Разбивает повторы ячейки на независимые пары контрагентов.
+
+    Компонент памяти привязан к ``party_id``, а тот выводится из ``pair_id``.
+    Пока вся ячейка — одна пара, её 40 повторов обязаны идти строго по
+    очереди, и самые дорогие конфигурации становятся узким местом всего
+    прогона. Разбивая ячейку на пары по ``chunk`` встреч, мы сохраняем
+    репутационный механизм (глубина истории ≥ ``memory_window``, дальше окно
+    всё равно не читается) и возвращаем параллелизм.
+
+    Методологически это не подмена: дизайн-док требует, чтобы память
+    превращала разовую игру в повторяющуюся для одной стороны, а не чтобы
+    конкретная пара встретилась ровно сорок раз.
+    """
+
+    if chunk <= 0:
+        return specs
+    out: list[SessionSpec] = []
+    for spec in specs:
+        pair_index = spec.repeat_index // chunk
+        out.append(replace(spec, pair_id=f"{spec.pair_id}:p{pair_index:03d}"))
+    return out
+
+
+def _needs_memory_order(bucket: list[SessionSpec]) -> bool:
+    """Нужен ли строгий порядок повторов внутри ячейки.
+
+    Нужен ровно тогда, когда хотя бы у одной стороны включён компонент
+    памяти: только он переносит состояние между сессиями одной пары.
+    """
+
+    return any(s.harness_a.memory or s.harness_b.memory for s in bucket)
 
 
 def _failure_record(

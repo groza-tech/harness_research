@@ -38,7 +38,7 @@ runner:
   counterbalance_roles: true
   # Предохранители сессии. Живут в коде харнесса, а не в промпте.
   max_turns_per_session: 24
-  max_tokens_per_session: 120000
+  max_tokens_per_session: 500000
   max_wall_s_per_session: 900.0
   max_consecutive_failures: 12
   fail_fast: false

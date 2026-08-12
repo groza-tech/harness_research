@@ -107,6 +107,8 @@ def load_llm_settings(
         temperature=float(os.getenv("HA_TEMPERATURE", "0.4")),
         max_tokens=_optional_int(os.getenv("HA_MAX_TOKENS")),
         reasoning=(os.getenv("HA_REASONING") or "").strip().lower() or None,
+        price_in_per_mtok=float(os.getenv("HA_PRICE_IN_PER_MTOK", "0") or 0),
+        price_out_per_mtok=float(os.getenv("HA_PRICE_OUT_PER_MTOK", "0") or 0),
         timeout_s=float(os.getenv("HA_TIMEOUT_S", "60")),
         max_attempts=int(os.getenv("HA_MAX_ATTEMPTS", "4")),
         backoff_base_s=float(os.getenv("HA_BACKOFF_BASE_S", "2")),
@@ -186,8 +188,23 @@ class RunnerConfig:
     counterbalance_roles: bool = True
     # Предохранители харнесса (не промпта!) — см. observability.CircuitBreaker.
     max_turns_per_session: int = 24
-    max_tokens_per_session: int = 120_000
-    max_wall_s_per_session: float = 900.0
+    # Бюджет токенов на сессию — единственный реальный предохранитель от
+    # разгона, раз ответ модели не режется потолком. Считаем по факту:
+    # рассуждающая модель тратит ~5 тыс. токенов на ход, 24 хода ⇒ ~130 тыс.,
+    # поэтому запас четырёхкратный. Слишком тесный бюджет обрывал бы сессии
+    # как технические сбои ровно на самых «думающих» конфигурациях.
+    max_tokens_per_session: int = 500_000
+    # Потолок времени сессии. Рассуждающая модель тратит ~100 с на ход, и
+    # при 24 ходах сессия идёт ~40 минут — тесный лимит обрывал бы её как
+    # технический сбой ровно там, где модель думает дольше всего.
+    max_wall_s_per_session: float = 7200.0
+    # Сколько повторов ячейки образуют одну «пару» с общей памятью. Внутри
+    # пары порядок строгий (H1 копит историю), но разные пары независимы и
+    # идут параллельно. Значение ≥ memory_window: глубже окна история всё
+    # равно не читается, поэтому гнать все 40 повторов одной парой — значит
+    # ничего не выиграть в репутационном механизме и потерять весь
+    # параллелизм на самых дорогих ячейках.
+    pair_chunk: int = 8
     max_consecutive_failures: int = 12
     fail_fast: bool = False
     # Обрывать ли сессию, когда сторона перестала что-либо менять. По

@@ -77,9 +77,12 @@ echo "=================================================================="
 "${PY[@]}" doctor --ping
 
 for STAGE in ${STAGES}; do
+  # У пилота свой конфиг и свои повторы: n_scenarios=32 там подобрано под
+  # repeats=32. Навязать ему 40 повторов значило бы пустить сценарии по
+  # второму кругу и сломать общие случайные числа внутри ячейки.
   case "$STAGE" in
-    pilot) CFG=configs/pilot.yaml   ;;
-    *)     CFG=configs/default.yaml ;;
+    pilot) CFG=configs/pilot.yaml;   REPEATS_ARG=() ;;
+    *)     CFG=configs/default.yaml; REPEATS_ARG=(--repeats "$REPEATS") ;;
   esac
   echo
   echo "------------------------------------------------------------------"
@@ -92,7 +95,7 @@ for STAGE in ${STAGES}; do
     --config "$CFG" \
     --experiment "$STAGE" \
     --provider openrouter \
-    --repeats "$REPEATS" \
+    "${REPEATS_ARG[@]}" \
     --workers "$WORKERS" \
     --output "${OUT}/${STAGE}" \
     --report "${REP}/${STAGE}" \

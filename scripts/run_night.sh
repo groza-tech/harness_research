@@ -33,6 +33,15 @@ REP="${REP:-reports/night_${STAMP}}"
 WORKERS="${WORKERS:-24}"
 REPEATS="${REPEATS:-40}"
 STAGES="${STAGES:-pilot E2 E1}"
+# Конфиг неспилотных этапов. Для Э3–Э5 подставляйте configs/main.yaml: там
+# число повторов пересчитано по фактической дисперсии пилота.
+CFG_MAIN="${CFG_MAIN:-configs/default.yaml}"
+# Каталог прогона Э2, из которого Э3 берёт выживших компонентов. Пусто —
+# придётся задать --survivors вручную, иначе Э3 откажется стартовать.
+SURVIVORS_FROM="${SURVIVORS_FROM:-}"
+# Параметры популяции для Э5.
+AGENTS="${AGENTS:-24}"
+PERIODS="${PERIODS:-8}"
 
 if [[ ! -f .env ]]; then
   echo "Нет .env — скопируйте .env.example и пропишите OPENROUTER_API_KEY." >&2
@@ -85,9 +94,19 @@ for STAGE in ${STAGES}; do
   # repeats=32. Навязать ему 40 повторов значило бы пустить сценарии по
   # второму кругу и сломать общие случайные числа внутри ячейки.
   case "$STAGE" in
-    pilot) CFG=configs/pilot.yaml;   REPEATS_ARG=() ;;
-    *)     CFG=configs/default.yaml; REPEATS_ARG=(--repeats "$REPEATS") ;;
+    pilot) CFG=configs/pilot.yaml; REPEATS_ARG=() ;;
+    *)     CFG="$CFG_MAIN";        REPEATS_ARG=(--repeats "$REPEATS") ;;
   esac
+  # Число повторов берём из конфига, если он его задаёт осознанно (main.yaml
+  # пересчитан по дисперсии пилота) — навязывать ему REPEATS не надо.
+  if [[ "$CFG" == *main.yaml ]]; then REPEATS_ARG=(); fi
+  STAGE_ARGS=()
+  if [[ "$STAGE" == "E3" && -n "$SURVIVORS_FROM" ]]; then
+    STAGE_ARGS=(--survivors-from "$SURVIVORS_FROM")
+  fi
+  if [[ "$STAGE" == "E5" ]]; then
+    STAGE_ARGS=(--agents "$AGENTS" --periods "$PERIODS")
+  fi
   echo
   echo "------------------------------------------------------------------"
   echo "[night] этап ${STAGE} — старт $(date '+%F %T')"
@@ -100,6 +119,7 @@ for STAGE in ${STAGES}; do
     --experiment "$STAGE" \
     --provider openrouter \
     ${REPEATS_ARG[@]+"${REPEATS_ARG[@]}"} \
+    ${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"} \
     --workers "$WORKERS" \
     --output "${OUT}/${STAGE}" \
     --report "${REP}/${STAGE}" \

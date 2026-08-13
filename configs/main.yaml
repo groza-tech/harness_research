@@ -1,0 +1,50 @@
+# Основной прогон Э3–Э5. Отличается от default.yaml одним: числом повторов,
+# пересчитанным по ФАКТИЧЕСКОЙ дисперсии пилота, а не по догадке.
+#
+# Пилот 12.08.2026 дал sd(φ^A) = 0.34 на асимметричной ячейке. При таком
+# разбросе доверительный интервал не накрывает ноль при:
+#     эффект 15 п.п. →  n ≥  81
+#     эффект 10 п.п. →  n ≥ 182
+#     эффект  8 п.п. →  n ≥ 252
+# Фактически найденные в Э2 эффекты: планировщик 14.8 п.п., обязательство
+# 8.5 п.п. Берём n = 256 — этого хватает обоим, включая слабейший.
+#
+# n_scenarios поднято до того же числа: пул общих случайных чисел должен быть
+# не меньше числа повторов, иначе внутри ячейки один и тот же розыгрыш (v,c)
+# встретится несколько раз и съест часть независимой вариации.
+
+scenarios:
+  v_low: 1000000.0
+  v_high: 1600000.0
+  c_low: 700000.0
+  c_high: 1300000.0
+  min_surplus: 50000.0
+  discount: 0.9
+  max_rounds: 10
+  n_scenarios: 256
+  seed: 20260812
+  unit: "руб. за партию"
+  good: "квартальная поставка компонентов"
+
+harness:
+  market_comparables: 5
+  market_noise_frac: 0.06
+  verifier_max_concession_frac: 0.35
+  verifier_max_repairs: 2
+  planner_horizon: 4
+  compaction_tail_turns: 2
+  memory_window: 6
+
+runner:
+  repeats: 256
+  max_workers: 24
+  counterbalance_roles: true
+  max_turns_per_session: 24
+  max_tokens_per_session: 500000
+  max_wall_s_per_session: 7200.0
+  pair_chunk: 8
+  max_consecutive_failures: 12
+  fail_fast: false
+
+info_regimes: ["I0", "I1"]
+prompt_variant: base

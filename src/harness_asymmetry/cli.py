@@ -87,7 +87,8 @@ def build_plan(
     if experiment == "E2":
         return plan_e2_screening(model=default_model, repeats=repeats, info_regimes=regimes)
     if experiment == "E3":
-        survivors = args.survivors or ["memory", "verifier", "market"]
+        survivors = args.survivors or _survivors_from_screening(args)
+        print(f"Э3 идёт на выживших компонентах: {', '.join(survivors)}")
         return plan_e3_gradient(
             survivors=survivors, models=models, repeats=repeats, info_regimes=regimes
         )
@@ -104,6 +105,40 @@ def build_plan(
             seed=config.scenarios.seed,
         )
     raise ConfigError(f"Неизвестный эксперимент: {experiment}. Доступны: {EXPERIMENTS}.")
+
+
+def _survivors_from_screening(args: argparse.Namespace) -> list[str]:
+    """Берёт выживших из результатов Э2, а не из зашитого списка.
+
+    Дизайн-док §4.3 требует, чтобы Э3 гонялся на компонентах, отобранных
+    скринингом. Зашитый по умолчанию список — прямой путь к тому, чтобы
+    прогнать ядро статьи не на тех компонентах и заметить это через неделю.
+    """
+
+    source = getattr(args, "survivors_from", None)
+    if not source:
+        raise ConfigError(
+            "Для Э3 нужен список выживших компонентов. Укажите либо "
+            "--survivors planner commitment, либо --survivors-from <каталог Э2>, "
+            "чтобы отобрать их по результатам скрининга."
+        )
+    from harness_asymmetry.analysis.econometrics import (
+        screening_effects,
+        survivors_from_screening,
+    )
+    from harness_asymmetry.analysis.metrics import load_sessions
+
+    path = Path(source).expanduser().resolve()
+    csv = path / "sessions.csv" if path.is_dir() else path
+    if not csv.exists():
+        raise ConfigError(f"Не найден {csv} — укажите каталог прогона Э2.")
+    effects = screening_effects(load_sessions(csv))
+    survivors = survivors_from_screening(effects)
+    if not survivors:
+        raise ConfigError(
+            f"В {csv} ни один компонент не прошёл скрининг. Задайте --survivors вручную."
+        )
+    return survivors
 
 
 def _plan_summary(specs: Sequence[SessionSpec], config: RunConfig) -> dict[str, float]:
@@ -337,7 +372,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--workers", type=int, default=None, help="Параллельных ячеек.")
         sp.add_argument("--info-regimes", nargs="+", default=None, choices=("I0", "I1"))
         sp.add_argument("--prompt-variant", default=None, choices=("base", "terse", "formal"))
-        sp.add_argument("--survivors", nargs="+", default=None, help="Компоненты для Э3.")
+        sp.add_argument(
+            "--survivors", nargs="+", default=None, help="Компоненты для Э3 (явный список)."
+        )
+        sp.add_argument(
+            "--survivors-from",
+            default=None,
+            help="Каталог прогона Э2: выжившие компоненты отбираются по его скринингу.",
+        )
         sp.add_argument(
             "--model",
             default=None,

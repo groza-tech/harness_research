@@ -459,6 +459,25 @@ def build_results_report(
         "получен современный аналог классического результата.\n"
     )
     variance = analytics.get("variance")
+    if isinstance(variance, pd.DataFrame) and not variance.empty and "dependent" in variance:
+        dep = str(variance["dependent"].iloc[0])
+        asym = float(variance["asymmetric_share"].iloc[0])
+        if dep == "efficiency":
+            lines.append(
+                f"> **Отклик — аллокативная эффективность $E$, не доля $\\phi^A$.** "
+                f"Асимметричных ячеек в этих данных {asym:.0%}: план практически "
+                f"целиком симметричен, а при одинаковой обвязке у обеих сторон "
+                f"$\\phi^A \\approx 0{{,}}5$ **по построению** — делить нечего. "
+                f"Раскладывать её дисперсию значило бы раскладывать шум вокруг "
+                f"половины и выдавать его за результат. Осмысленный вопрос к "
+                f"симметричным данным другой: влияет ли обвязка на то, насколько "
+                f"быстро и надёжно стороны вообще находят сделку.\n"
+            )
+        else:
+            lines.append(
+                f"Отклик — доля излишка $\\phi^A$; асимметричных ячеек "
+                f"{asym:.0%}.\n"
+            )
     lines.append(_md_table(variance, floatfmt=".2f"))
     if isinstance(variance, pd.DataFrame) and not variance.empty and "eta_sq_pct" in variance:
         lines.append(_variance_verdict(variance))
@@ -636,36 +655,74 @@ def build_results_report(
 
 
 def _variance_verdict(variance: pd.DataFrame) -> str:
-    try:
-        model_share = float(
-            variance.loc[variance["source"] == "Модель", "eta_sq_pct"].iloc[0]
-        )
-    except (IndexError, KeyError, ValueError):
-        model_share = float("nan")
-    try:
-        harness_share = float(
-            variance.loc[variance["source"] == "Харнесс", "eta_sq_pct"].iloc[0]
-        )
-    except (IndexError, KeyError, ValueError):
-        harness_share = float("nan")
+    """Вердикт по разложению. Доли берём из таблицы, а не вычитаем из ста.
+
+    Вычитание «100 − модель − харнесс» теряет член взаимодействия, а он как
+    раз бывает самым крупным: отдача от обвязки зависит от того, какая модель
+    в ней работает. Молча приписать это остатку — потерять результат.
+    """
+
+    dep = str(variance["dependent"].iloc[0]) if "dependent" in variance else "phi_a"
+    what = "аллокативной эффективности" if dep == "efficiency" else "доли излишка"
+
+    def share(name: str) -> float:
+        try:
+            return float(variance.loc[variance["source"] == name, "eta_sq_pct"].iloc[0])
+        except (IndexError, KeyError, ValueError):
+            return float("nan")
+
+    model_share = share("Модель")
+    harness_share = share("Харнесс")
+    inter_share = share("Модель × Харнесс")
+    residual = share("Остаток (сценарий, шум LLM)")
+
     if harness_share != harness_share:  # NaN
         return "\n_Вклад харнесса не выделен: в данных варьируется только один фактор._\n"
     if model_share != model_share:
         return (
-            f"\n**Итог:** харнесс объясняет {harness_share:.1f}% дисперсии доли излишка. "
+            f"\n**Итог:** харнесс объясняет {harness_share:.1f}% дисперсии {what}. "
             "Модель в этом прогоне не варьировалась, поэтому сравнить вклады нельзя — "
             "нужен прогон Э1 с тремя весовыми классами.\n"
+        )
+
+    systematic = harness_share + model_share + (inter_share if inter_share == inter_share else 0.0)
+    tail = (
+        f"Остаток — {residual:.1f}% ({'розыгрыш сценария и собственный шум LLM'})."
+        if residual == residual
+        else ""
+    )
+
+    # Взаимодействие крупнее любого из главных эффектов — самостоятельный
+    # результат: эффекты не складываются, отдача от обвязки зависит от модели.
+    if inter_share == inter_share and inter_share > max(model_share, harness_share):
+        return (
+            f"\n**Итог:** главные эффекты сопоставимы и невелики — модель "
+            f"{model_share:.2f}%, харнесс {harness_share:.2f}%, — но их "
+            f"**взаимодействие ({inter_share:.2f}%) крупнее каждого из них**. "
+            f"Это содержательный результат, а не шум: отдача от обвязки зависит "
+            f"от того, какая модель в ней работает, то есть «модель» и «институт» "
+            f"не складываются аддитивно. Ровно на этом стоит RQ3 о курсе обмена. "
+            f"{tail} Систематически объяснено {systematic:.1f}%.\n"
+        )
+    if systematic < 5.0:
+        return (
+            f"\n**Итог:** ни модель ({model_share:.2f}%), ни харнесс "
+            f"({harness_share:.2f}%) не объясняют сколько-нибудь заметной доли "
+            f"дисперсии {what}. {tail} Сравнивать вклады здесь нельзя: оба тонут "
+            "в шуме. Либо эффект существенно меньше межсценарной вариации, либо "
+            "не хватает мощности — смотрите пересчёт требуемого $n$ в отчёте о "
+            "прогоне.\n"
         )
     if harness_share >= model_share:
         return (
             f"\n**Итог:** харнесс объясняет {harness_share:.1f}% дисперсии против "
             f"{model_share:.1f}% у модели. Это и есть заголовок статьи: при равном "
-            "интеллекте выигрывает тот, у кого лучше обвязка.\n"
+            f"интеллекте выигрывает тот, у кого лучше обвязка. {tail}\n"
         )
     return (
         f"\n**Итог:** модель объясняет {model_share:.1f}% дисперсии против "
         f"{harness_share:.1f}% у харнесса. Содержательное расхождение с ожиданием — "
-        "его надо объяснять, а не прятать.\n"
+        f"его надо объяснять, а не прятать. {tail}\n"
     )
 
 

@@ -169,6 +169,11 @@ def distributive_test(component_effects: pd.DataFrame) -> pd.DataFrame:
         "распределительный",
         np.where(out["non_distributive_share"] < 0.75, "смешанный", "меняет пирог"),
     )
+    # Там, где сторона B не варьировалась (Э2 держит её голой), γ не оценён.
+    # Пустой γ уходит в NaN, и формула выше молча объявила бы компонент
+    # «меняющим пирог» — вывод, которого данные не поддерживают. Тест
+    # применим только к планам, где обе стороны варьируются (Э3, Э4).
+    out.loc[out["gamma"].isna(), "verdict"] = "γ не оценён: противник не варьировался"
     return out[["component", "code", "beta", "gamma", "beta_plus_gamma",
                 "non_distributive_share", "verdict"]]
 
@@ -178,12 +183,27 @@ def distributive_test(component_effects: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def variance_decomposition(df: pd.DataFrame) -> pd.DataFrame:
-    """Двухфакторный ANOVA: сколько дисперсии $\\phi^A$ от модели, сколько от обвязки.
+def variance_decomposition(
+    df: pd.DataFrame, *, dependent: str = "auto"
+) -> pd.DataFrame:
+    """Двухфакторный ANOVA: сколько дисперсии от модели, сколько от обвязки.
 
     Это главный слайд статьи (§6.2). Если обвязка объясняет сопоставимо или
-    больше — получен современный аналог результата Годе–Сандера, и это
-    заголовок статьи.
+    больше — получен современный аналог результата Годе–Сандера.
+
+    **Выбор зависимой переменной не косметика.** На симметричном плане (Э1,
+    где обе стороны получают одинаковую конфигурацию) доля излишка
+    $\\phi^A$ равна примерно 0,5 *по построению*: стороны оснащены
+    одинаково, делить нечего. Раскладывать её дисперсию бессмысленно —
+    получится разложение шума вокруг половины, и «харнесс объясняет 0,3%»
+    будет выглядеть как содержательный результат, не будучи им.
+    Осмысленный отклик на симметричных данных — аллокативная эффективность
+    $E$: обвязка влияет на то, насколько быстро и надёжно стороны находят
+    сделку, а не на то, кому достанется больше.
+
+    ``dependent="auto"`` выбирает $\\phi^A$, если в данных есть асимметричные
+    ячейки, и $E$ — если план целиком симметричен. Выбор пишется в колонку
+    ``dependent``, чтобы отчёт не мог о нём умолчать.
 
     Считаем через ``anova_lm(typ=2)``: тип II корректен при
     несбалансированных ячейках, которые неизбежны после отсева технических
@@ -193,7 +213,20 @@ def variance_decomposition(df: pd.DataFrame) -> pd.DataFrame:
     import statsmodels.api as sm
     import statsmodels.formula.api as smf
 
-    deals = _deals_frame(df)
+    clean = analysis_frame(df)
+    if clean.empty:
+        return pd.DataFrame()
+
+    asymmetric_share = float((clean["harness_a"] != clean["harness_b"]).mean())
+    if dependent == "auto":
+        dependent = "phi_a" if asymmetric_share > 0.05 else "efficiency"
+
+    if dependent == "phi_a":
+        deals = _deals_frame(df)
+    else:
+        # Эффективность определена и для несостоявшихся сделок (там она ноль),
+        # поэтому берём все сессии: провал торга — полноценное наблюдение.
+        deals = clean.loc[clean["efficiency"].notna()]
     if deals.empty:
         return pd.DataFrame()
 
@@ -207,7 +240,7 @@ def variance_decomposition(df: pd.DataFrame) -> pd.DataFrame:
     if len(factors) < 1:
         return pd.DataFrame()
 
-    formula = "phi_a ~ " + " + ".join(factors)
+    formula = f"{dependent} ~ " + " + ".join(factors)
     if len(factors) == 2:
         formula += " + C(model_a):C(harness_cfg)"
     try:
@@ -235,6 +268,9 @@ def variance_decomposition(df: pd.DataFrame) -> pd.DataFrame:
                 else np.nan,
                 "F": float(row.get("F", np.nan)),
                 "p_value": float(row.get("PR(>F)", np.nan)),
+                "dependent": dependent,
+                "asymmetric_share": round(asymmetric_share, 3),
+                "n_obs": int(len(deals)),
             }
         )
     return pd.DataFrame(rows)

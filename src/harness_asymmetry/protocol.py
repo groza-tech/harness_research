@@ -48,6 +48,7 @@ from harness_asymmetry.schemas import (
     HarnessVector,
     InfoRegime,
     MalformedActionError,
+    PRICE_TOLERANCE,
     Role,
     Scenario,
     SessionRecord,
@@ -503,7 +504,10 @@ def _finalize(
         # Цена вне [c, v] означает, что одна из сторон согласилась хуже
         # собственной резервной величины. Не чиним и не отбрасываем: это
         # наблюдаемое нарушение бюджетного ограничения (ZI-U против ZI-C).
-        record.budget_violation = not (scenario.c <= record.price <= scenario.v)
+        # Допуск в рубль отсекает округление цены до целых — см. PRICE_TOLERANCE.
+        record.budget_violation = not (
+            scenario.c - PRICE_TOLERANCE <= record.price <= scenario.v + PRICE_TOLERANCE
+        )
         record.phi_a = scenario.share_for(side_a.role, record.price)
         record.phi_b = scenario.share_for(side_b.role, record.price)
         rounds = record.agreement_round or 1

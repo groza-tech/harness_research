@@ -78,7 +78,14 @@ def build_plan(
     # HA_MODEL, а не на лёгком классе: §4.5 велит гнать основную массу дёшево,
     # но модель всё же должна надёжно держать формат действия. Разброс весовых
     # классов нужен только там, где он предмет измерения — в Э1 и Э4.
-    default_model = getattr(args, "model", None) or os.getenv("HA_MODEL") or models["mid"]
+    # ``models`` может быть сужен через --model-classes, и тогда «mid» в нём
+    # отсутствует: берём то, что осталось, а не падаем с KeyError.
+    default_model = (
+        getattr(args, "model", None)
+        or os.getenv("HA_MODEL")
+        or models.get("mid")
+        or next(iter(models.values()))
+    )
 
     if experiment == "pilot":
         return plan_pilot(model=default_model, repeats=repeats, info_regime=regimes[0])

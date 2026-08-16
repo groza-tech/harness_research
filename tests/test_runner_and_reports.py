@@ -150,3 +150,28 @@ def test_analysis_frame_drops_only_failures():
     summary = failure_summary(df)
     assert summary["failures"] == 1
     assert summary["failure_rate_pct"] == pytest.approx(33.33, abs=0.01)
+
+
+def test_budget_violation_survives_rounding_but_not_real_overshoot():
+    """Округление цены до целых рублей — не нарушение бюджетного ограничения.
+
+    Резервные величины непрерывны, модель называет целое число: превышение на
+    13 копеек ничего не говорит про ZI-U и не должно попадать в метрику
+    Годе–Сандера. Превышение на тысячу рублей — говорит.
+    """
+
+    from harness_asymmetry.analysis.metrics import analysis_frame
+
+    df = pd.DataFrame(
+        {
+            "technical_failure": [False, False, False],
+            "deal": [True, True, True],
+            "price": [1_425_361.0, 1_426_361.0, 699_000.0],
+            "v": [1_425_360.87, 1_425_360.87, 1_425_360.87],
+            "c": [700_000.0, 700_000.0, 700_000.0],
+            "budget_violation": [True, True, False],
+            "invalid_outputs": [0, 0, 0],
+        }
+    )
+    got = analysis_frame(df)["budget_violation"].tolist()
+    assert got == [False, True, True]

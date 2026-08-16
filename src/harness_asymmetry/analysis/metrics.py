@@ -20,7 +20,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from harness_asymmetry.schemas import COMPONENT_KEYS
+from harness_asymmetry.schemas import COMPONENT_KEYS, PRICE_TOLERANCE
 
 
 def load_sessions(path: str | Path) -> pd.DataFrame:
@@ -53,7 +53,17 @@ def analysis_frame(df: pd.DataFrame) -> pd.DataFrame:
 
     if df.empty:
         return df
-    return df.loc[~df["technical_failure"]].copy()
+    clean = df.loc[~df["technical_failure"]].copy()
+    if {"price", "v", "c"} <= set(clean.columns):
+        # Флаг из записи пересчитываем: допуск PRICE_TOLERANCE мог измениться
+        # после прогона, и старые сессии должны считаться по текущему правилу.
+        # Иначе округление цены до целых рублей навсегда осталось бы в данных
+        # как «нарушение бюджетного ограничения».
+        priced = clean["price"].notna()
+        clean.loc[priced, "budget_violation"] = (
+            clean.loc[priced, "price"] < clean.loc[priced, "c"] - PRICE_TOLERANCE
+        ) | (clean.loc[priced, "price"] > clean.loc[priced, "v"] + PRICE_TOLERANCE)
+    return clean
 
 
 def failure_summary(df: pd.DataFrame) -> dict[str, float]:
@@ -420,8 +430,11 @@ def budget_discipline(df: pd.DataFrame) -> pd.DataFrame:
     if deals.empty:
         return pd.DataFrame()
 
-    seller_violated = deals["price"] < deals["c"]
-    buyer_violated = deals["price"] > deals["v"]
+    # Пересчитываем из цены и резервных величин, а не берём готовый флаг из
+    # записи: допуск PRICE_TOLERANCE мог измениться после прогона, и тогда
+    # старые сессии должны считаться по новому правилу, а не по записанному.
+    seller_violated = deals["price"] < deals["c"] - PRICE_TOLERANCE
+    buyer_violated = deals["price"] > deals["v"] + PRICE_TOLERANCE
     a_is_seller = deals["role_a"] == "seller"
 
     rows = []

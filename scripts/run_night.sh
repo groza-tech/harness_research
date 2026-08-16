@@ -40,6 +40,10 @@ CFG_MAIN="${CFG_MAIN:-configs/default.yaml}"
 # придётся задать --survivors вручную, иначе Э3 откажется стартовать.
 SURVIVORS_FROM="${SURVIVORS_FROM:-}"
 # Параметры популяции для Э5.
+# Весовые классы для многомодельных планов. Для Э3 хватает "light mid":
+# тяжёлый класс даёт основную часть счёта, а предмет Э3 — обвязка, а не
+# разброс моделей. Пусто — все три.
+MODEL_CLASSES="${MODEL_CLASSES:-}"
 AGENTS="${AGENTS:-24}"
 PERIODS="${PERIODS:-8}"
 
@@ -101,8 +105,12 @@ for STAGE in ${STAGES}; do
   # пересчитан по дисперсии пилота) — навязывать ему REPEATS не надо.
   if [[ "$CFG" == *main.yaml ]]; then REPEATS_ARG=(); fi
   STAGE_ARGS=()
+  if [[ -n "$MODEL_CLASSES" ]]; then
+    STAGE_ARGS=(--model-classes $MODEL_CLASSES)
+  fi
   if [[ "$STAGE" == "E3" && -n "$SURVIVORS_FROM" ]]; then
-    STAGE_ARGS=(--survivors-from "$SURVIVORS_FROM")
+    STAGE_ARGS=(${STAGE_ARGS[@]+"${STAGE_ARGS[@]}"}
+      --survivors-from "$SURVIVORS_FROM")
   fi
   if [[ "$STAGE" == "E5" ]]; then
     STAGE_ARGS=(--agents "$AGENTS" --periods "$PERIODS")

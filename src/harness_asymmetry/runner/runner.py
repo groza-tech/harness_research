@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from harness_asymmetry.config import (
+    DEFAULT_OPENROUTER_BASE_URL,
     HarnessConfig,
     LLMSettings,
     RunConfig,
@@ -45,6 +46,7 @@ from harness_asymmetry.observability import (
     EventLog,
     new_id,
 )
+from harness_asymmetry.pricing import as_manifest, fetch_prices
 from harness_asymmetry.prompts import prompt_hashes
 from harness_asymmetry.protocol import SideSpec, run_session
 from harness_asymmetry.runner.plans import SessionSpec
@@ -73,6 +75,7 @@ def build_manifest(
     llm_settings: LLMSettings | None,
     pool: ScenarioPool,
     specs: Sequence[SessionSpec],
+    prices: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Всё, что нужно, чтобы повторить прогон через год."""
 
@@ -87,6 +90,7 @@ def build_manifest(
         "llm_settings": llm_settings.redacted() if llm_settings else None,
         "prompt_variant": config.prompt_variant,
         "prompt_hashes": prompt_hashes(),
+        "prices": prices,
         "scenario_pool_fingerprint": pool.fingerprint(),
         "scenario_pool_size": len(pool),
         "config": config.as_dict(),
@@ -157,6 +161,16 @@ class ExperimentRunner:
 
         self.event_log = EventLog(self.output_dir / "events.jsonl", run_id=self.run_id)
         self.pool = build_scenario_pool(config.scenarios)
+        # Цены тянем один раз на прогон и пиннимся к ним. Общая цена на все
+        # модели занижала бы стоимость там, где классы различаются в разы.
+        self.prices, self.price_source = (
+            fetch_prices(
+                set(models.values()),
+                base_url=llm_settings.base_url if llm_settings else DEFAULT_OPENROUTER_BASE_URL,
+            )
+            if provider == "openrouter"
+            else ({}, "mock")
+        )
         self._clients: dict[str, LLMClient] = {}
         self._client_lock = threading.Lock()
         self._write_lock = threading.Lock()
@@ -169,11 +183,21 @@ class ExperimentRunner:
         with self._client_lock:
             client = self._clients.get(model)
             if client is None:
-                settings = (
-                    replace(self.llm_settings, model=model)
-                    if self.llm_settings is not None
-                    else None
-                )
+                settings = None
+                if self.llm_settings is not None:
+                    price_in, price_out = self.prices.get(
+                        model,
+                        (
+                            self.llm_settings.price_in_per_mtok,
+                            self.llm_settings.price_out_per_mtok,
+                        ),
+                    )
+                    settings = replace(
+                        self.llm_settings,
+                        model=model,
+                        price_in_per_mtok=price_in,
+                        price_out_per_mtok=price_out,
+                    )
                 client = build_client(
                     provider=self.provider,
                     settings=settings,
@@ -194,6 +218,7 @@ class ExperimentRunner:
             llm_settings=self.llm_settings,
             pool=self.pool,
             specs=specs,
+            prices=as_manifest(self.prices, self.price_source),
         )
         (self.output_dir / "run_manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

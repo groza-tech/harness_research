@@ -165,9 +165,30 @@ def _plan_summary(specs: Sequence[SessionSpec], config: RunConfig) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
+def _select_models(args: argparse.Namespace) -> dict[str, str]:
+    """Отбирает весовые классы для многомодельных планов (Э1, Э3, Э4).
+
+    §4.5 дизайн-дока: основную массу гнать на лёгких моделях, тяжёлые — только
+    там, где разброс весовых классов сам является предметом измерения. В Э3
+    измеряется градиент асимметрии обвязки, а не курс обмена, поэтому держать
+    там тяжёлый класс не нужно: он даёт 80% счёта и почти ничего к выводу.
+    """
+
+    registry = model_registry()
+    wanted = getattr(args, "model_classes", None)
+    if not wanted:
+        return registry
+    unknown = set(wanted) - set(registry)
+    if unknown:
+        raise ConfigError(
+            f"Неизвестные весовые классы: {sorted(unknown)}. Доступны: {sorted(registry)}."
+        )
+    return {k: registry[k] for k in wanted}
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     config = _apply_overrides(load_run_config(args.config), args)
-    models = model_registry()
+    models = _select_models(args)
     total = {"sessions": 0, "cells": 0, "max_llm_calls": 0, "est_tokens": 0}
     print(f"Конфиг: {args.config or DEFAULT_CONFIG_PATH}")
     print(f"Повторов на ячейку: {config.runner.repeats}; раундов: {config.scenarios.max_rounds}; "
@@ -200,7 +221,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
     config = _apply_overrides(load_run_config(args.config), args)
-    models = model_registry()
+    models = _select_models(args)
 
     llm_settings = None
     if args.provider == "openrouter":
@@ -374,6 +395,17 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--prompt-variant", default=None, choices=("base", "terse", "formal"))
         sp.add_argument(
             "--survivors", nargs="+", default=None, help="Компоненты для Э3 (явный список)."
+        )
+        sp.add_argument(
+            "--model-classes",
+            nargs="+",
+            default=None,
+            choices=("light", "mid", "heavy"),
+            help=(
+                "Весовые классы для многомодельных планов (Э1/Э3/Э4). По умолчанию все три. "
+                "Для Э3 хватает light mid: тяжёлый класс даёт основную часть счёта, а "
+                "предмет Э3 — обвязка, а не разброс моделей (§4.5)."
+            ),
         )
         sp.add_argument(
             "--survivors-from",

@@ -20,6 +20,12 @@ cd "$ROOT"
 set -a; . ./.deploy.env; set +a
 : "${REMOTE_HOST:?}" "${REMOTE_USER:?}" "${REMOTE_DIR:=/opt/harness_research}"
 
+# Каталог прогона: разные варианты счёта не должны смешиваться в одном.
+# Resume опознаёт сессии по session_id, а модель в него не входит — залить
+# лёгкий прогон поверх тяжёлого значило бы получить ячейки из двух моделей.
+OUT="${OUT:-outputs/server_run}"
+REP="${REP:-reports/$(basename "${OUT:-server_run}")}"
+
 KEY="${HOME}/.ssh/harness_deploy"
 SSH_OPTS=(-i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
           -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o ConnectTimeout=25)
@@ -71,7 +77,9 @@ cmd_start() {
     echo "Прогон уже идёт. Сначала stop, либо смотрите status." >&2; exit 1
   fi
   rsh "cd ${REMOTE_DIR} && tmux new-session -d -s ${TMUX_SESSION} \
-       'STAGES=\"${stages}\" WORKERS=${WORKERS:-24} bash scripts/run_server.sh'"
+       'STAGES=\"${stages}\" WORKERS=${WORKERS:-24} OUT=\"${OUT}\" REP=\"${REP}\" \
+        MODEL_CLASSES=\"${MODEL_CLASSES:-}\" HA_MODEL=\"${HA_MODEL:-}\" \
+        bash scripts/run_server.sh'"
   sleep 3
   echo "Запущено в tmux-сессии «${TMUX_SESSION}». Этапы: ${stages}"
   rsh "tmux has-session -t ${TMUX_SESSION} 2>/dev/null && echo 'сессия жива' || echo 'СЕССИЯ НЕ ПОДНЯЛАСЬ — смотрите logs'"
@@ -79,9 +87,9 @@ cmd_start() {
 
 cmd_status() {
   rsh "tmux has-session -t ${TMUX_SESSION} 2>/dev/null && echo '● прогон ИДЁТ' || echo '○ прогон не запущен'"
-  rsh "cd ${REMOTE_DIR} && uptime && .venv/bin/python - <<'PY'
-import json, pathlib
-root = pathlib.Path('outputs/server_run')
+  rsh "cd ${REMOTE_DIR} && uptime && OUT='${OUT}' .venv/bin/python - <<'PY'
+import json, os, pathlib
+root = pathlib.Path(os.environ['OUT'])
 if not root.exists():
     print('данных пока нет'); raise SystemExit
 grand_n = 0; grand_cost = 0.0
@@ -106,7 +114,7 @@ for stage in sorted(p for p in root.iterdir() if p.is_dir()):
     print(f'{stage.name:>6}: сессий {n:>6}, сбоев {fails:>3}, ≈\${cost:.2f}')
 print(f'{\"ИТОГО\":>6}: сессий {grand_n:>6}, потрачено ≈\${grand_cost:.2f}')
 PY"
-  rsh "tail -3 ${REMOTE_DIR}/outputs/server_run/STATUS.txt 2>/dev/null || true"
+  rsh "tail -3 ${REMOTE_DIR}/${OUT}/STATUS.txt 2>/dev/null || true"
 }
 
 cmd_logs() { rsh "tail -n ${LINES:-40} ${REMOTE_DIR}/logs/${1:-run_server}.log"; }
@@ -114,12 +122,12 @@ cmd_logs() { rsh "tail -n ${LINES:-40} ${REMOTE_DIR}/logs/${1:-run_server}.log";
 cmd_fetch() {
   mkdir -p outputs reports
   rsync -az --info=stats1 -e "ssh ${SSH_OPTS[*]}" \
-    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/outputs/server_run" outputs/
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${OUT}" outputs/
   rsync -az --info=stats1 -e "ssh ${SSH_OPTS[*]}" \
-    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/reports/server_run" reports/
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${REP}" reports/
   rsync -az -e "ssh ${SSH_OPTS[*]}" \
-    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/logs" outputs/server_run/ 2>/dev/null || true
-  echo "забрано в outputs/server_run и reports/server_run"
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/logs" "outputs/$(basename "$OUT")/" 2>/dev/null || true
+  echo "забрано в outputs/$(basename "$OUT") и reports/$(basename "$REP")"
 }
 
 cmd_stop() {

@@ -492,6 +492,11 @@ def build_results_report(
             f"Наблюдений (сделок): **{spec['n_obs']}**; $R^2$ = {_num(spec['r_squared'])}; "
             f"стандартные ошибки — {spec['se_kind']}.\n"
         )
+        # Понижение спецификации обязано быть видно в отчёте: иначе таблица
+        # главных эффектов выглядит так, будто взаимодействия просто не важны,
+        # тогда как план физически не может их оценить.
+        for note in spec.get("notes") or []:
+            lines.append(f"\n> ⚠️ {note}\n")
         effects = analytics.get("component_effects")
         if isinstance(effects, pd.DataFrame) and not effects.empty:
             table = effects.copy()

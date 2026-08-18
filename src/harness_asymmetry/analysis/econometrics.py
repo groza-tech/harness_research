@@ -87,19 +87,47 @@ def main_specification(
     if scenario_fe and deals["scenario_id"].nunique() > 1:
         terms.append("C(scenario_id)")
 
-    formula = "phi_a ~ " + " + ".join(terms)
-    model = smf.ols(formula, data=deals)
-    if scenario_fe and deals["scenario_id"].nunique() > 1:
-        fit = model.fit(cov_type="cluster", cov_kwds={"groups": deals["scenario_id"]})
-        se_kind = "cluster(scenario_id)"
-    else:
-        fit = model.fit(cov_type="HC1")
-        se_kind = "HC1"
+    # Скрининговый план Плакетта–Бёрмана имеет разрешение III: двенадцать
+    # конфигураций несут ровно одиннадцать степеней свободы, и парные
+    # взаимодействия в нём принципиально неоценимы — они смешаны с главными
+    # эффектами. Подать их в OLS всё равно можно: statsmodels не откажет, а
+    # обратит матрицу псевдообращением и вернёт коэффициенты порядка 1e10 при
+    # стандартных ошибках 1e16 и p = 1.000. В отчёте это выглядит как таблица
+    # результатов, а не как ошибка, и именно так попадает в статью.
+    notes: list[str] = []
+    # Порядок отступления от полной спецификации: сначала то, что план не может
+    # оценить в принципе, потом то, что уже учтено другим регрессором.
+    attempts: list[tuple[list[str], str]] = [(terms, "")]
+    if any(":" in term for term in terms):
+        n_inter = sum(1 for term in terms if ":" in term)
+        attempts.append((
+            [term for term in terms if ":" not in term],
+            f"Взаимодействия ({n_inter} шт.) исключены: план не даёт для них степеней "
+            f"свободы — различных конфигураций стороны A всего "
+            f"{deals['harness_a'].nunique()}. Оценены главные эффекты.",
+        ))
+    if "C(role_a)" in terms and "C(scenario_id)" in terms:
+        # Роль задаётся чётностью номера повтора, а номер сценария — тем же
+        # номером. Роль поэтому есть функция сценария, и сценарный FE поглощает
+        # её целиком: ковариата не убрана из контроля, она в нём растворена.
+        base = attempts[-1][0]
+        attempts.append((
+            [term for term in base if term != "C(role_a)"],
+            "Ковариата роли снята: роль однозначно определяется номером повтора, а "
+            "тот же номер задаёт сценарий, поэтому роль коллинеарна сценарному "
+            "фиксированному эффекту и полностью им поглощается (§6.4).",
+        ))
+    model, fit, formula, se_kind = _fit_or_reduce(
+        smf, deals, attempts, scenario_fe=scenario_fe, notes=notes
+    )
+    if fit is None:
+        return {"ok": False, "reason": notes[-1] if notes else "вырожденная матрица плана"}
 
     coefs = _coef_table(fit)
     return {
         "ok": True,
         "formula": formula,
+        "notes": notes,
         "se_kind": se_kind,
         "n_obs": int(fit.nobs),
         "r_squared": float(fit.rsquared),
@@ -107,6 +135,49 @@ def main_specification(
         "coefficients": coefs,
         "component_effects": _component_effects(coefs),
     }
+
+
+def _design_is_full_rank(model: Any) -> bool:
+    """Хватает ли плану степеней свободы на все регрессоры."""
+
+    exog = np.asarray(model.exog, dtype=float)
+    return bool(np.linalg.matrix_rank(exog) == exog.shape[1])
+
+
+def _fit_or_reduce(
+    smf: Any,
+    deals: pd.DataFrame,
+    attempts: Sequence[tuple[list[str], str]],
+    *,
+    scenario_fe: bool,
+    notes: list[str],
+) -> tuple[Any, Any, str, str]:
+    """Оценивает первую спецификацию, которой хватает ранга, и пишет, что сняла.
+
+    Понижение спецификации — честный ответ на вырожденный план: скрининг умеет
+    оценивать главные эффекты и не умеет парные. Молча вернуть числа из
+    псевдообращения хуже, чем вернуть модель поменьше и сказать об этом.
+    """
+
+    model = None
+    formula = ""
+    for index, (active, note) in enumerate(attempts):
+        formula = "phi_a ~ " + " + ".join(active)
+        model = smf.ols(formula, data=deals)
+        if not _design_is_full_rank(model):
+            if index + 1 < len(attempts):
+                notes.append(attempts[index + 1][1])
+                continue
+            notes.append(
+                "Матрица плана вырождена даже после упрощения: конфигурации линейно "
+                "зависимы, оценка невозможна."
+            )
+            return model, None, formula, ""
+        if scenario_fe and deals["scenario_id"].nunique() > 1:
+            fit = model.fit(cov_type="cluster", cov_kwds={"groups": deals["scenario_id"]})
+            return model, fit, formula, "cluster(scenario_id)"
+        return model, model.fit(cov_type="HC1"), formula, "HC1"
+    return model, None, formula, ""
 
 
 def _coef_table(fit: Any) -> pd.DataFrame:

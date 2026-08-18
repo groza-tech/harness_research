@@ -121,9 +121,9 @@ cmd_logs() { rsh "tail -n ${LINES:-40} ${REMOTE_DIR}/logs/${1:-run_server}.log";
 
 cmd_fetch() {
   mkdir -p outputs reports
-  rsync -az --info=stats1 -e "ssh ${SSH_OPTS[*]}" \
+  rsync -az -e "ssh ${SSH_OPTS[*]}" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${OUT}" outputs/
-  rsync -az --info=stats1 -e "ssh ${SSH_OPTS[*]}" \
+  rsync -az -e "ssh ${SSH_OPTS[*]}" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${REP}" reports/
   rsync -az -e "ssh ${SSH_OPTS[*]}" \
     "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/logs" "outputs/$(basename "$OUT")/" 2>/dev/null || true
